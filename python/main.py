@@ -241,7 +241,7 @@ def my_sha256(msg: bytes) -> int:
     return digest
 
 def main():
-    message = b'both of these nuts'
+    message = b'abc'
     my_digest = my_sha256(message)
 
     print("MESSAGE:", message.hex())
