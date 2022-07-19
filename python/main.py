@@ -242,6 +242,7 @@ def my_sha256(msg: bytes) -> int:
 
 def main():
     message = b'abc'
+    print("PADDED:", pad_message(message));
     my_digest = my_sha256(message)
 
     print("MESSAGE:", message.hex())
