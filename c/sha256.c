@@ -200,10 +200,88 @@ uint32_t* sha256_compute(unsigned char** msgblks, uint64_t* numblks) {
   return H;
 }
 
+// Sha256 method closer to OpenSSL, use less memory for message schedule, combine loops.
+uint32_t* sha256_compute_openssl(unsigned char** msgblks, uint64_t* numblks) {
+  uint32_t* H = H0; // TODO: Should do deep copy.
+  uint32_t W[16];  // Combined message schedule/initial array.
+  uint32_t a, b, c, d, e, f, g, h, T1, T2;
+  uint32_t s0, s1;
+
+  int t;
+  for (int i = 0; i < *numblks; i++) {
+    // Fill message schedule with the current blk.
+    unsigned char* currblk = msgblks[i];
+
+    a = H[0];
+    b = H[1];
+    c = H[2];
+    d = H[3];
+    e = H[4];
+    f = H[5];
+    g = H[6];
+    h = H[7];
+
+    for (t = 0; t < 16; t++) {
+      W[t] = *(currblk++) << 24;
+      W[t] |= *(currblk++) << 16;
+      W[t] |= *(currblk++) << 8;
+      W[t] |= *(currblk++);
+
+      T1 = W[t] + h + Sigma1(e) + ch(e, f, g) + K[t];
+      T2 = Sigma0(a) + maj(a, b, c);
+      h = g;
+      g = f;
+      f = e;
+      e = d + T1;
+      d = c;
+      c = b;
+      b = a;
+      a = T1 + T2;
+    }
+
+    for (; t < 64; t++) {
+      s0 = W[(t+1) & 0xf];
+      s0 = sigma0(s0);
+      s1 = W[(t + 14) & 0xf];
+      s1 = sigma1(s1);
+
+      T1 = W[t & 0xf] += s0 + s1 + W[(t + 9) & 0xf];
+      T1 += h + Sigma1(e) + ch(e, f, g) + K[t];
+      T2 = Sigma0(a) + maj(a, b, c);
+      h = g;
+      g = f;
+      f = e;
+      e = d + T1;
+      d = c;
+      c = b;
+      b = a;
+      a = T1 + T2;
+    }
+
+    H[0] += a;
+    H[1] += b;
+    H[2] += c;
+    H[3] += d;
+    H[4] += e;
+    H[5] += f;
+    H[6] += g;
+    H[7] += h;
+  }
+
+  return H;
+}
+
 uint32_t* sha256(unsigned char* msg, uint64_t* msglen) {
   uint64_t numblks;
   unsigned char** msgblks = preprocess_msg(msg, msglen, &numblks);
   uint32_t* digest = sha256_compute(msgblks, &numblks);
+  return digest;
+}
+
+uint32_t* sha256_openssl(unsigned char* msg, uint64_t* msglen) {
+  uint64_t numblks;
+  unsigned char** msgblks = preprocess_msg(msg, msglen, &numblks);
+  uint32_t* digest = sha256_compute_openssl(msgblks, &numblks);
   return digest;
 }
 
@@ -220,8 +298,8 @@ void printwords(uint32_t* words, int len) {
 }
 
 int main() {
-  //unsigned char* msg = (unsigned char*)"abc";
-  unsigned char* msg = (unsigned char*)"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq";
+  unsigned char* msg = (unsigned char*)"abc";
+  //unsigned char* msg = (unsigned char*)"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq";
   uint64_t msgbytelen = strlen((char*)msg);
 
   uint64_t paddedbitlen;
@@ -244,13 +322,9 @@ int main() {
     printf("\n");
   }
 
-  uint32_t* digest = sha256(msg, &msgbytelen);
+  uint32_t* digest = sha256_openssl(msg, &msgbytelen);
   printf("digest: ");
   printwords(digest, 8);
-  printf("\n");
-
-  printf("digest: ");
-  printbytes((unsigned char*)digest, 32);
   printf("\n");
 
   // Free memory
