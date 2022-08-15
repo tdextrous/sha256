@@ -222,11 +222,13 @@ uint32_t* sha256_compute_openssl(unsigned char** msgblks, uint64_t* numblks) {
     h = H[7];
 
     for (t = 0; t < 16; t++) {
+      // Convert msg from byte array to uint32
       W[t] = *(currblk++) << 24;
       W[t] |= *(currblk++) << 16;
       W[t] |= *(currblk++) << 8;
       W[t] |= *(currblk++);
 
+      // Do compute
       T1 = W[t] + h + Sigma1(e) + ch(e, f, g) + K[t];
       T2 = Sigma0(a) + maj(a, b, c);
       h = g;
@@ -237,9 +239,14 @@ uint32_t* sha256_compute_openssl(unsigned char** msgblks, uint64_t* numblks) {
       c = b;
       b = a;
       a = T1 + T2;
+
+      printf("t=%02d ", t);
+      printf("%08X ", W[t]);
+      printf("\n\n");
     }
 
     for (; t < 64; t++) {
+      // do compute.
       s0 = W[(t+1) & 0xf];
       s0 = sigma0(s0);
       s1 = W[(t + 14) & 0xf];
@@ -248,6 +255,14 @@ uint32_t* sha256_compute_openssl(unsigned char** msgblks, uint64_t* numblks) {
       T1 = W[t & 0xf] += s0 + s1 + W[(t + 9) & 0xf];
       T1 += h + Sigma1(e) + ch(e, f, g) + K[t];
       T2 = Sigma0(a) + maj(a, b, c);
+
+      printf("t=%02d ", t);
+      printf("W[t]=%08X ", W[t]);
+      printf("T1=%08X ", T1);
+      printf("T2=%08X ", T2);
+      printf("ch=%08X ", ch(e,f,g));
+      printf("Sigma1(e)=%08X ", Sigma1(e));
+
       h = g;
       g = f;
       f = e;
@@ -256,8 +271,11 @@ uint32_t* sha256_compute_openssl(unsigned char** msgblks, uint64_t* numblks) {
       c = b;
       b = a;
       a = T1 + T2;
+
+      printf("\n\n");
     }
 
+    // Increment hash tmp val.
     H[0] += a;
     H[1] += b;
     H[2] += c;
