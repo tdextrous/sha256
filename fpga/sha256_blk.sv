@@ -50,6 +50,15 @@ always_ff @(posedge clk or negedge arst_n) begin
   end
 end
 
+logic axis_m_tvalid_d;
+always_ff @(posedge clk or negedge arst_n) begin
+  if (!arst_n) begin
+    axis_m_tvalid_d <= 0;
+  end else begin
+    axis_m_tvalid_d <= (state == PostRounds) ? is_last_msg_blk : 0;
+  end
+end
+
 // SHA-256 FSM (states explained at top of file).
 typedef enum {
   Idle,
@@ -63,7 +72,7 @@ state_t state, next;
 // State transitions.
 always_ff @(posedge clk or negedge arst_n) begin
   if (!arst_n) begin
-    state <= PreRounds;
+    state <= Idle;
   end else begin
     state <= next;
   end
@@ -118,7 +127,7 @@ always_comb begin
     end
     PostRounds: begin
       axis_s_tready = (is_last_msg_blk) ? axis_m_tready : 1;
-      axis_m_tvalid = is_last_msg_blk;
+      axis_m_tvalid = axis_m_tvalid_d;
     end
     default: begin
       axis_s_tready = 0;
@@ -150,9 +159,9 @@ always_ff @(posedge clk or negedge arst_n) begin
   end
 end
 
-always_comb is_rnd_0_15 = ~&rnd_counter[5:4];
+always_comb is_rnd_0_15 = ~|rnd_counter[5:4];
 
-// TODO: Fetch SHA-256 `K` constants from BRAM. Total of 2^11 bits.
+// Fetch SHA-256 `K` constants from BRAM. Total of 2^11 bits.
 logic en;
 logic [5:0] rnd_const_rom_addr;
 logic [31:0] rnd_const;               // K value from FIPS.
@@ -166,7 +175,15 @@ sha_round_constant_rom rom_i (
 // Drive ROM accesses.
 always_comb begin
   en = 1;
-  rnd_const_rom_addr = rnd_counter;
+end
+
+// Pre-fetch sha round constant for timing
+always_ff @(posedge clk) begin
+  if (next == PreRounds) begin
+    rnd_const_rom_addr <= 0;
+  end else if (state == RoundClk0) begin
+    rnd_const_rom_addr <= rnd_const_rom_addr + 1;
+  end
 end
 
 // Load msgblk into buffer.
@@ -192,18 +209,23 @@ always_ff @(posedge clk or negedge arst_n) begin
   end
 end
 
-// TODO: Populate message schedule.
-logic [31:0] s0, s1, msg_schedule_1, msg_schedule_14;
+// Populate message schedule.
+logic [31:0] s0, s1, msg_schedule_1, msg_schedule_14, msg_schedule_preadd;
 always_comb begin
   // To make things a bit less verbose.
-  msg_schedule_1 = msg_schedule[msg_schedule_ptrs[1]];
-  msg_schedule_14 = msg_schedule[msg_schedule_ptrs[14]];
+  msg_schedule_1 = msg_schedule[msg_schedule_ptrs[1+1]];
+  msg_schedule_14 = msg_schedule[msg_schedule_ptrs[14+1]];
 
   // Compute sigmas all inline.
-  // NOTE: Worried about timing.
-  // TODO: Check this actually meets timing.
-  s0 = ({ msg_schedule_1[0 +: 7], msg_schedule_1[31 -: (32-7)] }) ^ ({ msg_schedule_1[0 +: 18], msg_schedule[31 -: (32-18)]}) ^ (msg_schedule_1 >> 3);  // sigma0(W[t + 1 mod 16])
+  // TODO: Timing
+  s0 = ({ msg_schedule_1[0 +: 7], msg_schedule_1[31 -: (32-7)] }) ^ ({ msg_schedule_1[0 +: 18], msg_schedule_1[31 -: (32-18)]}) ^ (msg_schedule_1 >> 3);  // sigma0(W[t + 1 mod 16])
   s1 = ({ msg_schedule_14[0 +: 17], msg_schedule_14[31 -: (32-17)] }) ^ ({ msg_schedule_14[0 +: 19], msg_schedule_14[31 -: (32-19)]}) ^ (msg_schedule_14 >> 10);  // sigma1(W[t + 14 mod 16])
+end
+
+always_ff @(posedge clk) begin
+  if (state == RoundClk1 && rnd_counter > 14) begin
+    msg_schedule_preadd <= s0 + s1;
+  end
 end
 
 always_ff @(posedge clk) begin
@@ -211,13 +233,13 @@ always_ff @(posedge clk) begin
     if (is_rnd_0_15) begin
       msg_schedule[msg_schedule_ptrs[0]] <= msgblk[511 -: 32];
     end else begin
-      // TODO: Timing?
-      msg_schedule[msg_schedule_ptrs[0]] <= s0 + s1 + msg_schedule[msg_schedule_ptrs[9]];
+      // TODO: Timing
+      msg_schedule[msg_schedule_ptrs[0]] <= msg_schedule[msg_schedule_ptrs[0]] + msg_schedule[msg_schedule_ptrs[9]] + msg_schedule_preadd;
     end
   end
 end
 
-// TODO: Compute temp vars
+// Compute temp vars
 // Compute Sigma1(e) and ch(e,f,g)
 logic [31:0] e, f, g, ch, big_sigma1_e;
 always_comb begin
@@ -232,7 +254,7 @@ end
 
 always_ff @(posedge clk) begin
   if (state == RoundClk0) begin
-    // TODO: Timing?
+    // TODO: Timing
     tmp1 <= work_vars[7] + big_sigma1_e + ch;
   end
 end
@@ -259,12 +281,12 @@ always_ff @(posedge clk) begin
     end
   end else if (state == RoundClk0) begin
     // Shift in T2.
-    work_vars <= { work_vars[6:0], tmp2 };
+    work_vars <= { work_vars[6:4], work_vars[3] + rnd_const ,work_vars[2:0], tmp2 + rnd_const };
   end else if (state == RoundClk1) begin
     // Finish the adds.
-    // TODO: Timing?
-    work_vars[0] <= work_vars[0] + tmp1 + msg_schedule[msg_schedule_ptrs[0]] + rnd_const;
-    work_vars[4] <= work_vars[4] + tmp1 + msg_schedule[msg_schedule_ptrs[0]] + rnd_const;
+    // TODO: Timing
+    work_vars[0] <= work_vars[0] + tmp1 + msg_schedule[msg_schedule_ptrs[0]];
+    work_vars[4] <= work_vars[4] + tmp1 + msg_schedule[msg_schedule_ptrs[0]];
   end
 end
 
